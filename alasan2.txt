@@ -2133,38 +2133,21 @@ end
 
 local old_from_target = nil :: Model
 
--- Tambahkan fungsi reset untuk old_from_target
-function AutoParry:reset_target_tracking()
-    old_from_target = nil
-    self.parries = 0
-end
-
 function AutoParry:is_spam() 
     local target = AutoParry.target.current
     local ball_properties = AutoParry.ball.properties
     local player_character = LocalPlayer.Character
     local current_changed = AutoParry.target.current_changed
     local direction_changed_on_cframe = AutoParry.target.direction_changed_on_cframe
-    local time_threshold_adjust = 1.0
+    local time_threshold_adjust = 1.0  -- Added missing variable
     
-    -- Auto reset tracking jika target berubah
-    if current_changed then
-        old_from_target = nil
-    end
-    
-    -- Reset jika target dan arah berubah
+    -- Reset jika target dan arah berubah secara bersamaan
     if current_changed and direction_changed_on_cframe then
-       self:reset_target_tracking()
+       self.parries = 0
        return false
     end
     
-    -- Cek jika pemain mati
-    if player_character and player_character.Parent == workspace.Dead then
-        self:reset_target_tracking()
-        return false
-    end
-    
-    -- Target prioritization check (hanya jika ada target)
+    -- Cek jika ada target lain yang lebih dekat dengan arah kamera
     if player_character and player_character.PrimaryPart and target and target.PrimaryPart and workspace.CurrentCamera then
         local camera_cframe = workspace.CurrentCamera.CFrame
         local camera_direction = camera_cframe.LookVector
@@ -2172,214 +2155,173 @@ function AutoParry:is_spam()
         local vector_to_current_target = (current_target_position - camera_cframe.Position).Unit
         local dot_to_current_target = camera_direction:Dot(vector_to_current_target)
 
-        local has_better_target = false
         for _, other_player in pairs(workspace.Alive:GetChildren()) do
-            if other_player ~= target and other_player ~= player_character and 
-               other_player:IsA("Model") and other_player.PrimaryPart then
+            if other_player ~= target and other_player ~= player_character and other_player:IsA("Model") and other_player.PrimaryPart then
                 local other_position = other_player.PrimaryPart.Position
                 local vector_to_other = (other_position - camera_cframe.Position).Unit
                 local dot_to_other = camera_direction:Dot(vector_to_other)
                 
-                if dot_to_other > dot_to_current_target + 0.15 then -- Sedikit lebih toleran
-                    has_better_target = true
-                    break
+                -- Prioritaskan target yang lebih dekat dengan arah pandang kamera
+                if dot_to_other > dot_to_current_target + 0.1 then
+                    return false
                 end
             end
         end
-        
-        if has_better_target then
-            self.parries = math.max(0, self.parries - 1) -- Kurangi parries, jangan reset total
-            return false
-        end
     end
 
-    -- Validasi dasar
+    -- Validasi karakter pemain
+    if player_character and player_character.Parent == workspace.Dead then               
+        return false
+    end
+
+    -- Validasi target dan bola
     if not target or not target.Parent or not player_character or not player_character.Parent then
-        self:reset_target_tracking()
+        self.parries = 0
         return false
     end
 
     if not AutoParry.ball or not ball_properties or not ball_properties.position then
-        self:reset_target_tracking()
+        self.parries = 0
         return false
     end
 
     -- Cek kesehatan target
     local target_humanoid = target:FindFirstChildOfClass("Humanoid")
-    if not target_humanoid or target_humanoid.Health <= 0 then
-        self.parries = 0
+    if not target_humanoid or target_humanoid.Health <= 0 then      
         return false
     end
 
-    -- Track pengirim bola dengan sistem yang lebih baik
-    local current_from = AutoParry.target.from
-    if old_from_target == nil then
-        old_from_target = current_from
+    -- Track perubahan pengirim bola
+    local old_from_target_ref = old_from_target or AutoParry.target.from
+    if AutoParry.target.from ~= player_character then
+        old_from_target = AutoParry.target.from
     end
-    
-    -- Logic untuk menentukan apakah ini spam dari sumber yang sama
-    local is_same_source = (current_from == old_from_target)
-    
-    -- Update old_from_target hanya jika benar-benar berbeda
-    if current_from ~= old_from_target and current_from ~= player_character then
-        old_from_target = current_from
-        self.parries = 0 -- Reset parries saat pengirim berubah
+
+    -- Tunggu hingga mencapai threshold parries yang lebih tinggi
+    if self.parries < 4 and AutoParry.target.from == old_from_target_ref then
         return false
     end
 
-    -- Hitung parameter berdasarkan ping
+    -- Hitung threshold berdasarkan ping
     local player_ping = Player.Entity.properties.ping
     local distance_threshold = 19 + (player_ping / 80)
     local reach_time = ball_properties.distance / ball_properties.maximum_speed - (player_ping / 1000)
-    
-    -- Adaptive threshold berdasarkan kondisi
-    local base_parry_threshold = 3
-    local curve_parry_threshold = 6
-    local fast_ball_threshold = 2
-    
-    -- Jika speed tinggi, turunkan threshold
-    if self.speed > 70 then
-        base_parry_threshold = 2
-        curve_parry_threshold = 4
-    end
-    
-    -- Jika jarak dekat, turunkan threshold
-    if self.entity_distance < 15 then
-        base_parry_threshold = math.max(1, base_parry_threshold - 1)
-    end
 
     -- Reset jika terlalu lama sejak hit terakhir
-    if (tick() - self.last_hit) > 0.8 and self.entity_distance > distance_threshold then
-        if self.parries < base_parry_threshold then
+    if (tick() - self.last_hit) > 0.8 and self.entity_distance > distance_threshold and self.parries < 4 then
+        self.parries = 1
+        return false
+    end
+
+    -- Deteksi curve ball dengan threshold yang lebih tinggi
+    if ball_properties.lerp_radians then       
+        local curve_threshold = 0.028 + (player_ping / 100) 
+        if ball_properties.lerp_radians > curve_threshold then
+            if self.parries > 5 then
+                self.parries = 2
+            end
             return false
         end
     end
 
-    -- Deteksi curve ball dengan sistem yang lebih baik
-    local is_curve_ball = false
-    local curve_severity = 0
-    
+    -- Analisis mendalam untuk curve ball
+    local is_curve = false
+    local is_high_curve = false
     if ball_properties.lerp_radians then       
         local curve_threshold = 0.028 + (player_ping / 100)
-        local dot_threshold = 0.2 - (player_ping / 1000)
+        local dot_threshold = 0.2 - (player_ping / 1000)  -- Fixed: was missing division
+        local high_curve_dot_threshold = 0.4
         
         if ball_properties.lerp_radians > curve_threshold then
-            is_curve_ball = true
-            curve_severity = ball_properties.lerp_radians / curve_threshold
-            
-            -- High curve: langsung false
-            if ball_properties.dot < 0.4 then
-                if self.parries < curve_parry_threshold then
+            is_curve = true
+            -- High curve detection
+            if ball_properties.dot < high_curve_dot_threshold or 
+               (tick() - ball_properties.last_warping) < (reach_time / (1.1 / time_threshold_adjust)) then
+                is_high_curve = true
+                return false
+            -- Medium curve detection
+            elseif ball_properties.dot < dot_threshold then
+                if self.parries < 8 then  -- Increased threshold
                     return false
                 end
-                -- Reset sebagian parries untuk curve
-                self.parries = math.max(2, self.parries - 2)
-                return false
-            -- Medium curve: butuh threshold lebih tinggi
-            elseif ball_properties.dot < dot_threshold then
-                if self.parries < math.max(5, curve_parry_threshold - 1) then
-                    return false
+                if self.parries >= 8 then  -- Increased threshold
+                    self.parries = 1
                 end
             end
         end
     end
 
-    -- Timing check untuk warp
-    local time_since_warp = tick() - ball_properties.last_warping
-    if time_since_warp < (reach_time / 1.3) and self.entity_distance > distance_threshold then
-        if not is_curve_ball and self.parries < fast_ball_threshold then
-            return false
+    -- Beri waktu lebih untuk mendeteksi warp timing
+    if (tick() - ball_properties.last_warping) < (reach_time / 1.3) and 
+       self.entity_distance > distance_threshold and 
+       self.parries < 5 then  -- Increased from 4 to 5
+        if self.parries > 4 then  -- Increased from 3 to 4
+            self.parries = 1
         end
-        if is_curve_ball and self.parries < curve_parry_threshold then
-            return false
-        end
+        return false
     end
 
-    -- Speed checks dengan threshold adaptif
-    local speed_threshold = is_curve_ball and 3 or 2
-    
+    -- Speed consistency check dengan threshold lebih tinggi
     if math.abs(self.speed - self.old_speed) < 5.2 and 
        self.entity_distance > distance_threshold and 
-       self.speed < 60 then
-        if self.parries < speed_threshold then
-            return false
+       self.speed < 60 and 
+       self.parries < 4 then  -- Increased from 3 to 4
+        if self.parries > 4 then  -- Increased from 3 to 4
+            self.parries = 0
         end
+        return false
     end
     
-    -- Minimum speed requirement (lebih fleksibel untuk curve)
-    local min_speed = is_curve_ball and 40 or 50
-    if self.speed < min_speed then
-        if self.parries < base_parry_threshold then
-            return false
-        end
+    -- Minimum speed requirement
+    if self.speed < 50 then
+        self.parries = 1
+        return false
     end
 
     -- Speed validation
     if self.maximum_speed < self.speed and self.entity_distance > distance_threshold then
-        self.parries = math.max(1, self.parries - 1)
+        self.parries = 1
         return false
     end
 
-    -- Sistem distance check yang lebih sederhana dan efektif
-    local function check_distance_with_threshold(distance, max_distance, threshold_type)
-        local thresholds = {
-            close = 1,
-            medium = 2,
-            far = 3
-        }
-        
-        if distance > max_distance then
-            local required_parries = thresholds[threshold_type] or 2
-            if self.parries < required_parries then
-                return false
-            end
+    -- Distance checks dengan threshold yang dinaikkan
+    if self.entity_distance > self.range and self.entity_distance > distance_threshold then
+        if self.parries > 3 then  -- Increased from 2 to 3
+            self.parries = 1
         end
-        return true
-    end
-
-    -- Eksekusi distance checks
-    if not check_distance_with_threshold(self.entity_distance, self.range, "medium") then
-        return false
-    end
-    
-    if not check_distance_with_threshold(self.ball_distance, self.range, "medium") then
-        return false
-    end
-    
-    if not check_distance_with_threshold(self.last_position_distance, self.spam_accuracy, "far") then
-        return false
-    end
-    
-    if not check_distance_with_threshold(self.ball_distance, self.spam_accuracy, "medium") then
-        return false
-    end
-    
-    if not check_distance_with_threshold(self.entity_distance, self.spam_accuracy, "medium") then
         return false
     end
 
-    -- Final decision dengan multiple conditions
-    local can_spam = false
-    
-    -- Kondisi untuk straight fast ball
-    if not is_curve_ball and self.speed > 60 and self.entity_distance < 20 then
-        can_spam = self.parries >= fast_ball_threshold
-    -- Kondisi untuk curve ball
-    elseif is_curve_ball then
-        can_spam = self.parries >= curve_parry_threshold
-    -- Kondisi normal
-    else
-        can_spam = self.parries >= base_parry_threshold
+    if self.ball_distance > self.range and self.entity_distance > distance_threshold then
+        if self.parries > 3 then  -- Increased from 2 to 3
+            self.parries = 2
+        end
+        return false
     end
-    
-    -- Additional safety check
-    if can_spam and is_same_source then
-        -- Increment parries untuk consistency tracking
-        self.parries = self.parries + 1
-        return true
+
+    if self.last_position_distance > self.spam_accuracy and self.entity_distance > distance_threshold then
+        if self.parries > 5 then  -- Increased from 4 to 5
+            self.parries = 2
+        end
+        return false
     end
-    
-    return false
+
+    if self.ball_distance > self.spam_accuracy and self.ball_distance > distance_threshold then
+        if self.parries > 4 then  -- Increased from 3 to 4
+            self.parries = 2
+        end
+        return false
+    end
+
+    if self.entity_distance > self.spam_accuracy and self.entity_distance > (distance_threshold - math.pi) then
+        if self.parries > 4 then  -- Increased from 3 to 4
+            self.parries = 2
+        end
+        return false
+    end
+
+    -- Hanya return true jika semua kondisi terpenuhi dan threshold parries tercapai
+    return self.parries >= 3  -- Explicit check untuk memastikan threshold tercapai
 end
 
 AutoParry.ball.training_ball_entity = AutoParry.Lobby_Balls()
