@@ -15,7 +15,7 @@ local player = Players.LocalPlayer
 
 -- ================= CONFIG =================
 local STORAGE_URL = "https://api.npoint.io/7a3d67358b7c6c95e3ad"
-local WEBHOOK_URL = "https://discord.com/api/webhooks/1462024849361862670/oH9XiPnTR9wc126_kc5WA8WmAekht4CV8lP8_Gih3YyDsxIFbexWRCzP_KfL4DY1ezeJ"
+local WEBHOOK_URL = "aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ2MjAyNDg0OTM2MTg2MjY3MC9vSDlYaVBuVFI5d2MxMjZfa2M1V0E4V21BZWtodDRDVjhsUDhfR2loM1l5RHN4SUZiZXhXUkN6UF9LZkw0RFkxZXplSg=="
 local SOURCE_ID   = "ujbygKqk" -- pastebin id
 -- ==========================================
 
