@@ -1,154 +1,266 @@
 --==================================================
--- ADVANCED LOADSTRING ANALYTICS + PROTECTION
+-- ADVANCED LOADSTRING ANALYTICS + PROTECTION V2.3
+-- FULLY FIXED FOR SUPABASE (leaderboard + username)
 --==================================================
 
--- Anti double execute
-if _G.__SCRIPT_ALREADY_RUN then return end
+-- ================= ANTI DOUBLE EXECUTE =================
+if _G.__SCRIPT_ALREADY_RUN then
+    warn("⚠️ Script already running!")
+    return
+end
 _G.__SCRIPT_ALREADY_RUN = true
 
+-- ================= SERVICES =================
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local MarketplaceService = game:GetService("MarketplaceService")
 local UserInputService = game:GetService("UserInputService")
+local StarterGui = game:GetService("StarterGui")
 
 local player = Players.LocalPlayer
 
--- ================= CONFIG =================
-local STORAGE_URL = "https://api.npoint.io/7a3d67358b7c6c95e3ad"
-local WEBHOOK_URL = "aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ2MjAyNDg0OTM2MTg2MjY3MC9vSDlYaVBuVFI5d2MxMjZfa2M1V0E4V21BZWtodDRDVjhsUDhfR2loM1l5RHN4SUZiZXhXUkN6UF9LZkw0RFkxZXplSg=="
-local SOURCE_ID   = "ujbygKqk" -- pastebin id
--- ==========================================
+-- ================= EXECUTOR REQUEST =================
+local http_request =
+    (syn and syn.request)
+    or (http and http.request)
+    or request
+    or http_request
 
--- ================= ANTI LEAKER =================
-local src = tostring(debug.getinfo(1).source)
-if not src:find(SOURCE_ID) then
-    warn("Script source mismatch (possible reupload)")
+if not http_request then
+    warn("❌ Executor does not support HTTP requests")
     return
 end
+
+-- ================= BASE64 DECODE =================
+local function b64decode(data)
+    local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    data = string.gsub(data, '[^'..b..'=]', '')
+    return (data:gsub('.', function(x)
+        if x == '=' then return '' end
+        local r,f='',(b:find(x)-1)
+        for i=6,1,-1 do
+            r = r .. (f%2^i - f%2^(i-1) > 0 and '1' or '0')
+        end
+        return r
+    end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+        if #x ~= 8 then return '' end
+        local c=0
+        for i=1,8 do
+            c = c + (x:sub(i,i)=='1' and 2^(8-i) or 0)
+        end
+        return string.char(c)
+    end))
+end
+
+-- ================= NOTIFY =================
+local function notify(title, text, duration)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = duration or 5
+        })
+    end)
+end
+
+-- ================= CONFIG =================
+local SUPABASE_URL = "https://jvzjlbkkgkonulksgaeq.supabase.co"
+local SUPABASE_KEY = "sb_publishable_gzuzITcydymq2ZpAPrQHzA_El_Ujxe8"
+
+local ENCODED_WEBHOOK = "aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ2MjAyNDg0OTM2MTg2MjY3MC9vSDlYaVBuVFI5d2MxMjZfa2M1V0E4V21BZWtodDRDVjhsUDhfR2loM1l5RHN4SUZiZXhXUkN6UF9LZkw0RFkxZXplSg=="
+
+local WEBHOOK_URL = b64decode(ENCODED_WEBHOOK)
 
 -- ================= EXECUTOR DETECTION =================
 local function detectExecutor()
-    if identifyexecutor then
-        return identifyexecutor()
-    end
-    if getexecutorname then
-        return getexecutorname()
-    end
-    if syn then
-        return "Synapse X"
-    end
-    if KRNL_LOADED then
-        return "KRNL"
-    end
-    if fluxus then
-        return "Fluxus"
-    end
-    if isfile and readfile then
-        return "Script-Ware / Delta"
-    end
-    if getgenv and getrenv then
-        return "Mobile Executor"
-    end
-    return "Unknown / Custom"
+    if identifyexecutor then return identifyexecutor() end
+    if getexecutorname then return getexecutorname() end
+    if syn then return "Synapse X" end
+    if KRNL_LOADED then return "KRNL" end
+    if fluxus then return "Fluxus" end
+    if getgenv then return "Mobile Executor" end
+    return "Unknown"
 end
 
 local executor = detectExecutor()
-local platform = UserInputService.TouchEnabled and "Mobile" or "PC"
+local platform = UserInputService.TouchEnabled and "📱 Mobile" or "💻 PC"
 
--- ================= FETCH STORAGE =================
-local storage
-local ok = pcall(function()
-    storage = HttpService:JSONDecode(game:HttpGet(STORAGE_URL))
-end)
-if not ok or type(storage) ~= "table" then return end
+notify("🔄 Analytics", "Connecting to database...", 3)
 
-storage.totalExecuted = storage.totalExecuted or 0
-storage.users = storage.users or {}
-storage.blacklist = storage.blacklist or {}
+-- ================= GLOBAL DATA =================
+local userExecutions = 0
+local totalExecutions = 0
+local leaderboardData = {}
 
--- ================= BLACKLIST USER =================
-if table.find(storage.blacklist, player.UserId) then
-    player:Kick("Access denied")
-    return
+-- ================= GET USERNAME BY ID =================
+local function getUsernameFromId(userId)
+    local success, username = pcall(function()
+        -- Coba dari game terlebih dahulu
+        local targetPlayer = Players:GetPlayerByUserId(tonumber(userId))
+        if targetPlayer then
+            return targetPlayer.Name
+        end
+        
+        -- Jika tidak ada di game, gunakan API Roblox
+        local res = http_request({
+            Url = "https://users.roblox.com/v1/users/" .. userId,
+            Method = "GET"
+        })
+        
+        if res.StatusCode == 200 then
+            local data = HttpService:JSONDecode(res.Body)
+            return data.name
+        end
+        
+        return "Unknown"
+    end)
+    
+    return success and username or "Unknown"
 end
 
--- ================= UPDATE DATA =================
-storage.totalExecuted += 1
-
-local uid = tostring(player.UserId)
-storage.users[uid] = storage.users[uid] or {
-    username = player.Name,
-    count = 0
-}
-
-local userData = storage.users[uid]
-userData.username = player.Name
-userData.count += 1
-userData.executor = executor
-userData.platform = platform
-userData.lastPlaceId = game.PlaceId
-userData.lastSeen = os.date("%Y-%m-%d %H:%M:%S")
-
--- ================= SAVE STORAGE =================
-pcall(function()
-    HttpService:PostAsync(
-        STORAGE_URL,
-        HttpService:JSONEncode(storage),
-        Enum.HttpContentType.ApplicationJson
-    )
-end)
-
--- ================= LEADERBOARD =================
-local leaderboard = {}
-for _, data in pairs(storage.users) do
-    table.insert(leaderboard, data)
+-- ================= UPDATE USERNAME IN DATABASE =================
+local function updateUsernameInDatabase()
+    pcall(function()
+        http_request({
+            Url = SUPABASE_URL .. "/rest/v1/rpc/update_username",
+            Method = "POST",
+            Headers = {
+                ["apikey"] = SUPABASE_KEY,
+                ["Authorization"] = "Bearer " .. SUPABASE_KEY,
+                ["Content-Type"] = "application/json"
+            },
+            Body = HttpService:JSONEncode({
+                uid = tostring(player.UserId),
+                uname = player.Name
+            })
+        })
+    end)
 end
 
-table.sort(leaderboard, function(a, b)
-    return (a.count or 0) > (b.count or 0)
-end)
+-- ================= INCREMENT EXEC =================
+local function updateExecution()
+    -- Update username dulu
+    updateUsernameInDatabase()
+    
+    -- Kemudian increment execution
+    local res = http_request({
+        Url = SUPABASE_URL .. "/rest/v1/rpc/increment_exec",
+        Method = "POST",
+        Headers = {
+            ["apikey"] = SUPABASE_KEY,
+            ["Authorization"] = "Bearer " .. SUPABASE_KEY,
+            ["Content-Type"] = "application/json"
+        },
+        Body = HttpService:JSONEncode({
+            uid = tostring(player.UserId)
+        })
+    })
 
-local leaderboardText = ""
-for i = 1, math.min(3, #leaderboard) do
-    leaderboardText ..= string.format(
-        "%d. %s (%dx)\n",
-        i,
-        leaderboard[i].username,
-        leaderboard[i].count
-    )
+    if res.StatusCode == 204 then
+        userExecutions = userExecutions + 1
+    end
 end
 
--- ================= GAME INFO =================
-local gameName = "Unknown"
-pcall(function()
-    gameName = MarketplaceService:GetProductInfo(game.PlaceId).Name
-end)
-
--- ================= DISCORD LOG =================
-local payload = {
-    embeds = {{
-        title = "📊 Script Execution Logged",
-        color = 5793266,
-        fields = {
-            { name = "👤 User", value = player.Name, inline = true },
-            { name = "🆔 UserId", value = tostring(player.UserId), inline = true },
-            { name = "⚙️ Executor", value = executor, inline = true },
-            { name = "💻 Platform", value = platform, inline = true },
-            { name = "🎮 Game", value = gameName, inline = false },
-            { name = "📈 Total Executed", value = tostring(storage.totalExecuted), inline = false },
-            { name = "🏆 Leaderboard", value = leaderboardText ~= "" and leaderboardText or "No data", inline = false }
+-- ================= FETCH LEADERBOARD =================
+local function fetchLeaderboard()
+    local res = http_request({
+        Url = SUPABASE_URL .. "/rest/v1/leaderboard?select=user_id,total_exec&order=total_exec.desc",
+        Method = "GET",
+        Headers = {
+            ["apikey"] = SUPABASE_KEY,
+            ["Authorization"] = "Bearer " .. SUPABASE_KEY
         }
-    }}
-}
+    })
 
-pcall(function()
-    HttpService:PostAsync(
-        WEBHOOK_URL,
-        HttpService:JSONEncode(payload),
-        Enum.HttpContentType.ApplicationJson
-    )
+    leaderboardData = HttpService:JSONDecode(res.Body or "[]")
+
+    for _, v in ipairs(leaderboardData) do
+        totalExecutions += v.total_exec
+        if v.user_id == tostring(player.UserId) then
+            userExecutions = v.total_exec
+        end
+    end
+end
+
+-- ================= FORMAT LEADERBOARD =================
+local function formatLeaderboard()
+    if #leaderboardData == 0 then
+        return "No data available"
+    end
+
+    local medals = {"🥇", "🥈", "🥉"}
+    local text = ""
+
+    for i, v in ipairs(leaderboardData) do
+        if i > 10 then break end
+        
+        -- Ambil username berdasarkan user_id
+        local username = getUsernameFromId(v.user_id)
+        local medal = medals[i] or "🔸"
+        
+        -- Format: 🥇 #1 Rudertinf (10035142876) | 2 exec
+        text ..= string.format(
+            "%s #%d %s (UID:%s) | %d exec\n",
+            medal, i, username, v.user_id, v.total_exec
+        )
+    end
+
+    return text
+end
+
+-- ================= RUN ANALYTICS =================
+task.spawn(function()
+    updateExecution()
+    task.wait(0.5)
+    fetchLeaderboard()
+
+    local gameName = "Unknown Game"
+    pcall(function()
+        gameName = MarketplaceService:GetProductInfo(game.PlaceId).Name
+    end)
+
+    -- Format leaderboard untuk Discord embed
+    local leaderboardText = formatLeaderboard()
+    
+    local payload = {
+        username = "Analytics System",
+        embeds = {{
+            title = "📊 Script Execution Logged",
+            color = 5793266,
+            fields = {
+                { name = "👤 User", value = player.Name, inline = true },
+                { name = "🆔 User ID", value = tostring(player.UserId), inline = true },
+                { name = "⚙️ Executor", value = executor, inline = true },
+                { name = "📱 Platform", value = platform, inline = true },
+                { name = "🔢 Your Exec", value = tostring(userExecutions), inline = true },
+                { name = "🎯 Total Exec", value = tostring(totalExecutions), inline = true },
+                { name = "🎮 Game", value = gameName, inline = false },
+                { name = "🏆 Leaderboard", value = "```\n" .. leaderboardText .. "\n```", inline = false }
+            },
+            footer = {
+                text = "Analytics v2.3 • " .. os.date("%d/%m/%Y %H:%M:%S")
+            }
+        }}
+    }
+
+    -- Kirim ke Discord webhook
+    http_request({
+        Url = WEBHOOK_URL,
+        Method = "POST",
+        Headers = { ["Content-Type"] = "application/json" },
+        Body = HttpService:JSONEncode(payload)
+    })
+
+    notify("✅ Analytics Loaded", "Execution logged successfully", 5)
+    
+    -- Tampilkan leaderboard di console juga
+    print("\n" .. string.rep("=", 40))
+    print("🏆 LEADERBOARD")
+    print(string.rep("=", 40))
+    print(formatLeaderboard())
+    print(string.rep("=", 40))
 end)
 
 --==================================================
--- END SYSTEM (SCRIPT UTAMA KAMU LANJUT DI BAWAH)
+-- END ANALYTICS SYSTEM
 --==================================================
