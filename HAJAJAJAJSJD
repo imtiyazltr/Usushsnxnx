@@ -1,9 +1,4 @@
---==================================================
--- ADVANCED LOADSTRING ANALYTICS + PROTECTION V2.3
--- FULLY FIXED FOR SUPABASE (leaderboard + username)
---==================================================
 
--- ================= ANTI DOUBLE EXECUTE =================
 if _G.__SCRIPT_ALREADY_RUN then
     warn("⚠️ Script already running!")
     return
@@ -139,10 +134,10 @@ end
 
 -- ================= INCREMENT EXEC =================
 local function updateExecution()
-    -- Update username dulu
+    
     updateUsernameInDatabase()
     
-    -- Kemudian increment execution
+    
     local res = http_request({
         Url = SUPABASE_URL .. "/rest/v1/rpc/increment_exec",
         Method = "POST",
@@ -194,11 +189,10 @@ local function formatLeaderboard()
     for i, v in ipairs(leaderboardData) do
         if i > 10 then break end
         
-        -- Ambil username berdasarkan user_id
         local username = getUsernameFromId(v.user_id)
         local medal = medals[i] or "🔸"
         
-        -- Format: 🥇 #1 Rudertinf (10035142876) | 2 exec
+        
         text ..= string.format(
             "%s #%d %s (UID:%s) | %d exec\n",
             medal, i, username, v.user_id, v.total_exec
@@ -219,7 +213,7 @@ task.spawn(function()
         gameName = MarketplaceService:GetProductInfo(game.PlaceId).Name
     end)
 
-    -- Format leaderboard untuk Discord embed
+
     local leaderboardText = formatLeaderboard()
     
     local payload = {
@@ -243,7 +237,7 @@ task.spawn(function()
         }}
     }
 
-    -- Kirim ke Discord webhook
+    
     http_request({
         Url = WEBHOOK_URL,
         Method = "POST",
@@ -253,14 +247,10 @@ task.spawn(function()
 
     notify("✅ Analytics Loaded", "Execution logged successfully", 5)
     
-    -- Tampilkan leaderboard di console juga
+    
     print("\n" .. string.rep("=", 40))
     print("🏆 LEADERBOARD")
     print(string.rep("=", 40))
     print(formatLeaderboard())
     print(string.rep("=", 40))
 end)
-
---==================================================
--- END ANALYTICS SYSTEM
---==================================================
